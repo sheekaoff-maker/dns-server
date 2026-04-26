@@ -1,20 +1,19 @@
 import 'dotenv/config';
 import * as dns2 from 'dns2';
 import { BackendClient } from './backend-client';
-import { Resolver } from './resolver';
+import { resolve } from './resolver';
 
 const BACKEND_URL = process.env.BACKEND_URL || 'http://localhost:3000';
 const DNS_PORT = parseInt(process.env.DNS_PORT || '53', 10);
 
 const backendClient = new BackendClient(BACKEND_URL);
-const resolver = new Resolver(backendClient);
 
-const server = new dns2.UDPServer(async (request, send, peer) => {
+const server = new dns2.UDPServer(async (request: any, send: any, peer: any) => {
   const response = dns2.Packet.createResponseFromRequest(request);
 
   for (const question of request.questions) {
     try {
-      const answers = await resolver.resolve(question, peer);
+      const answers = await resolve(question, peer, backendClient);
       response.answers.push(...answers);
     } catch (err: any) {
       console.error(`[ERROR] Failed to resolve ${question.name}: ${err.message}`);
@@ -34,13 +33,12 @@ server.listen(DNS_PORT, '0.0.0.0', () => {
   );
 });
 
-// TCP server for larger responses
-const tcpServer = new dns2.TCPServer(async (request, send, peer) => {
+const tcpServer = new dns2.TCPServer(async (request: any, send: any, peer: any) => {
   const response = dns2.Packet.createResponseFromRequest(request);
 
   for (const question of request.questions) {
     try {
-      const answers = await resolver.resolve(question, peer);
+      const answers = await resolve(question, peer, backendClient);
       response.answers.push(...answers);
     } catch (err: any) {
       console.error(`[ERROR] Failed to resolve ${question.name}: ${err.message}`);

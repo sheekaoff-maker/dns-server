@@ -11,68 +11,57 @@ function pickUpstream(): string {
   return UPSTREAM_DNS_LIST[Math.floor(Math.random() * UPSTREAM_DNS_LIST.length)];
 }
 
-export class Resolver extends dns2.Resolver {
-  private backendClient: BackendClient;
+export async function resolve(
+  question: any,
+  peer: any,
+  backendClient: BackendClient,
+): Promise<any[]> {
+  const domain = question.name as string;
+  const qtype = question.type as number;
 
-  constructor(backendClient: BackendClient) {
-    super();
-    this.backendClient = backendClient;
-  }
+  const sourceIp = peer?.address || '0.0.0.0';
 
-  async resolve(question: any, peer: any): Promise<any[]> {
-    const domain = question.name as string;
-    const qtype = question.type as number;
+  const policy = await backendClient.checkPolicy(sourceIp, domain);
 
-    // Extract source IP from the peer address
-    const sourceIp = peer?.address || '0.0.0.0';
+  if (policy.action === 'BLOCK') {
+    console.info(
+      `[BLOCK] domain=${domain} sourceIp=${sourceIp} reason=${policy.reason}`,
+    );
 
-    // Check DNS policy with backend
-    const policy = await this.backendClient.checkPolicy(sourceIp, domain);
-
-    if (policy.action === 'BLOCK') {
-      console.info(
-        `[BLOCK] domain=${domain} sourceIp=${sourceIp} reason=${policy.reason}`,
-      );
-
-      if (qtype === Packet.TYPE.A) {
-        return [{ type: Packet.TYPE.A, name: domain, address: '0.0.0.0', ttl: 30 }];
-      }
-      if (qtype === Packet.TYPE.AAAA) {
-        return [{ type: Packet.TYPE.AAAA, name: domain, address: '::', ttl: 30 }];
-      }
-      // For other record types, return empty (NXDOMAIN-like)
-      return [];
+    if (qtype === 1) {
+      return [{ type: 1, name: domain, address: '0.0.0.0', ttl: 30 }];
     }
-
-    // ALLOW: forward to upstream DNS
-    console.debug(`[ALLOW] domain=${domain} sourceIp=${sourceIp}`);
-    return this.forwardToUpstream(question);
+    if (qtype === 28) {
+      return [{ type: 28, name: domain, address: '::', ttl: 30 }];
+    }
+    return [];
   }
 
-  private async forwardToUpstream(question: any): Promise<any[]> {
-    const upstream = pickUpstream();
+  console.debug(`[ALLOW] domain=${domain} sourceIp=${sourceIp}`);
+  return forwardToUpstream(question);
+}
 
+async function forwardToUpstream(question: any): Promise<any[]> {
+  const upstream = pickUpstream();
+
+  try {
     const transport = new UDPClient(upstream);
+    const response = await transport.resolve(question);
+    return response.answers;
+  } catch (err: any) {
+    console.warn(
+      `[FORWARD FAILED] domain=${question.name} upstream=${upstream}: ${err.message}`,
+    );
 
     try {
-      const response = await transport.resolve(question);
+      const tcpTransport = new TCPClient(upstream);
+      const response = await tcpTransport.resolve(question);
       return response.answers;
-    } catch (err: any) {
-      console.warn(
-        `[FORWARD FAILED] domain=${question.name} upstream=${upstream}: ${err.message}`,
+    } catch (tcpErr: any) {
+      console.error(
+        `[FORWARD TCP FAILED] domain=${question.name} upstream=${upstream}: ${tcpErr.message}`,
       );
-
-      // Try TCP fallback
-      try {
-        const tcpTransport = new TCPClient(upstream);
-        const response = await tcpTransport.resolve(question);
-        return response.answers;
-      } catch (tcpErr: any) {
-        console.error(
-          `[FORWARD TCP FAILED] domain=${question.name} upstream=${upstream}: ${tcpErr.message}`,
-        );
-        return [];
-      }
+      return [];
     }
   }
 }
