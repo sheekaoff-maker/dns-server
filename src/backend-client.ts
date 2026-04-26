@@ -1,33 +1,32 @@
-import axios, { AxiosInstance } from 'axios';
+import axios from 'axios';
 
-export interface DnsPolicyResult {
+const TIMEOUT_MS = 2000;
+
+export interface PolicyResult {
   action: 'ALLOW' | 'BLOCK';
-  blockIp: string;
-  reason: string | null;
+  blockIp?: string;
+  reason?: string;
 }
 
 export class BackendClient {
-  private client: AxiosInstance;
+  private baseUrl: string;
 
   constructor(baseUrl: string) {
-    this.client = axios.create({
-      baseURL: baseUrl,
-      timeout: 2000,
-    });
+    this.baseUrl = baseUrl.replace(/\/$/, '');
   }
 
-  async checkPolicy(sourceIp: string, domain: string): Promise<DnsPolicyResult> {
+  async checkPolicy(sourceIp: string, domain: string): Promise<PolicyResult> {
     try {
-      const response = await this.client.get('/dns/policy/check', {
+      const res = await axios.get(`${this.baseUrl}/dns/policy/check`, {
         params: { sourceIp, domain },
+        timeout: TIMEOUT_MS,
       });
-      return response.data as DnsPolicyResult;
-    } catch (error: any) {
-      // On error, ALLOW by default (fail-open) to avoid breaking DNS resolution
-      console.error(
-        `[BackendClient] Policy check failed for ${domain} from ${sourceIp}: ${error.message}`,
+      return res.data;
+    } catch (err: any) {
+      console.warn(
+        `[BACKEND ERROR] ${err.message} — failing open (ALLOW)`,
       );
-      return { action: 'ALLOW', blockIp: '0.0.0.0', reason: null };
+      return { action: 'ALLOW' };
     }
   }
 }
