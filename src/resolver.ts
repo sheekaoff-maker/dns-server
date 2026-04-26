@@ -11,6 +11,27 @@ function pickUpstream(): string {
   return UPSTREAM_DNS_LIST[Math.floor(Math.random() * UPSTREAM_DNS_LIST.length)];
 }
 
+function extractSourceIp(peer: any): string {
+  try {
+    let ip = '0.0.0.0';
+    // TCP: peer is net.Socket — use remoteAddress
+    if (peer?.remoteAddress) {
+      ip = peer.remoteAddress;
+    }
+    // UDP: peer is rinfo { address, port, family }
+    else if (typeof peer?.address === 'string') {
+      ip = peer.address;
+    }
+    // Strip IPv6-mapped IPv4 prefix
+    if (ip.startsWith('::ffff:')) {
+      ip = ip.substring(7);
+    }
+    return ip;
+  } catch {
+    return '0.0.0.0';
+  }
+}
+
 export async function resolve(
   question: any,
   peer: any,
@@ -19,7 +40,7 @@ export async function resolve(
   const domain = question.name as string;
   const qtype = question.type as number;
 
-  const sourceIp = peer?.address || '0.0.0.0';
+  const sourceIp = extractSourceIp(peer);
 
   const policy = await backendClient.checkPolicy(sourceIp, domain);
 
