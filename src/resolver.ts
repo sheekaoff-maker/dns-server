@@ -38,28 +38,28 @@ export async function resolve(
   }
 
   console.debug(`[ALLOW] domain=${domain} sourceIp=${sourceIp}`);
-  return forwardToUpstream(question);
+  return forwardToUpstream(domain, qtype);
 }
 
-async function forwardToUpstream(question: any): Promise<any[]> {
+async function forwardToUpstream(domain: string, qtype: number): Promise<any[]> {
   const upstream = pickUpstream();
 
   try {
-    const transport = new UDPClient(upstream);
-    const response = await transport.resolve(question);
-    return response.answers;
+    const resolve = UDPClient({ dns: upstream, port: 53 });
+    const response = await resolve(domain, qtype);
+    return response.answers || [];
   } catch (err: any) {
     console.warn(
-      `[FORWARD FAILED] domain=${question.name} upstream=${upstream}: ${err.message}`,
+      `[FORWARD UDP FAILED] domain=${domain} upstream=${upstream}: ${err.message}`,
     );
 
     try {
-      const tcpTransport = new TCPClient(upstream);
-      const response = await tcpTransport.resolve(question);
-      return response.answers;
+      const resolve = TCPClient({ dns: upstream, port: 53 });
+      const response = await resolve(domain, qtype);
+      return response.answers || [];
     } catch (tcpErr: any) {
       console.error(
-        `[FORWARD TCP FAILED] domain=${question.name} upstream=${upstream}: ${tcpErr.message}`,
+        `[FORWARD TCP FAILED] domain=${domain} upstream=${upstream}: ${tcpErr.message}`,
       );
       return [];
     }

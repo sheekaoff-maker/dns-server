@@ -4,19 +4,13 @@ declare module 'dns2' {
     static TYPE: { A: number; AAAA: number; NS: number; CNAME: number; MX: number; TXT: number };
   }
 
-  export class Resolver {
-    resolve(question: any, peer?: any): Promise<any[]>;
+  export interface UpstreamOptions {
+    dns: string;
+    port?: number;
   }
 
-  export class UDPClient {
-    constructor(host: string);
-    resolve(question: any): Promise<any>;
-  }
-
-  export class TCPClient {
-    constructor(host: string);
-    resolve(question: any): Promise<any>;
-  }
+  export function UDPClient(options: UpstreamOptions): (domain: string, type: number) => Promise<{ answers: any[] }>;
+  export function TCPClient(options: UpstreamOptions): (domain: string, type: number) => Promise<{ answers: any[] }>;
 
   export class UDPServer {
     constructor(handler: (request: any, send: (response: any) => void, peer: any) => void | Promise<void>);
