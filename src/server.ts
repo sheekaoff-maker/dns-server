@@ -3,7 +3,9 @@ import * as dgram from 'dgram';
 import { BackendClient } from './backend-client';
 import { resolve } from './resolver';
 
-const BACKEND_URL = process.env.BACKEND_URL || 'http://localhost:3000';
+// The DNS service is co-located with the backend on the same VPS, so it talks
+// to the backend over loopback (fast, no TLS/Nginx round-trip on the hot path).
+const BACKEND_URL = process.env.BACKEND_URL || 'http://127.0.0.1:3000';
 const DNS_PORT = parseInt(process.env.DNS_PORT || '53', 10);
 
 const backendClient = new BackendClient(BACKEND_URL);
