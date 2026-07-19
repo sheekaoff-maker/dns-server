@@ -26,11 +26,14 @@ function pickUpstream(): string {
  * Parse domain name from DNS packet starting at offset.
  * Returns { name: string, endOffset: number }
  */
+const MAX_COMPRESSION_JUMPS = 128;
+
 function parseName(buf: Buffer, offset: number): { name: string; endOffset: number } {
   const labels: string[] = [];
   let pos = offset;
   let jumped = false;
   let jumpPos = -1;
+  let jumps = 0;
 
   while (pos < buf.length) {
     const len = buf[pos];
@@ -40,8 +43,17 @@ function parseName(buf: Buffer, offset: number): { name: string; endOffset: numb
     }
     // DNS compression pointer
     if ((len & 0xc0) === 0xc0) {
+      if (pos + 1 >= buf.length) {
+        throw new Error('malformed DNS packet: truncated compression pointer');
+      }
+      if (++jumps > MAX_COMPRESSION_JUMPS) {
+        throw new Error('malformed DNS packet: compression pointer loop detected');
+      }
       if (!jumped) jumpPos = pos + 2;
       const ptr = ((len & 0x3f) << 8) | buf[pos + 1];
+      if (ptr >= buf.length) {
+        throw new Error('malformed DNS packet: compression pointer out of bounds');
+      }
       pos = ptr;
       jumped = true;
       continue;
