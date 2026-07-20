@@ -7,6 +7,31 @@ const UPSTREAM_DNS_LIST = (process.env.UPSTREAM_DNS || '1.1.1.1,8.8.8.8')
 
 const UPSTREAM_TIMEOUT = 1500;
 
+// --- DNS auto-pairing probe detection ---
+//
+// A device's normal OS resolver can't carry an app-level token — DNS has no
+// field for that. Pairing instead works by the parent's phone sending one
+// raw UDP query, directly at this resolver's IP, for the hostname
+// `<token>.pair.guardtime.local`. We pattern-match that hostname here (must
+// match backend's PAIR_DOMAIN_SUFFIX exactly), confirm it against the
+// backend, and answer with a synthetic A record so the probe socket gets a
+// reply and knows the probe reached us — the actual IP in that record is
+// never used for anything.
+const PAIR_DOMAIN_SUFFIX = process.env.PAIR_DOMAIN_SUFFIX || 'pair.guardtime.local';
+const RESOLVER_REGION = process.env.RESOLVER_REGION || undefined;
+const PAIR_PROBE_ACK_IP = '127.0.0.1';
+
+const PAIR_HOSTNAME_PATTERN = new RegExp(
+  `^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\\.${PAIR_DOMAIN_SUFFIX.replace(/\./g, '\\.')}$`,
+  'i',
+);
+
+function extractPairToken(domain: string): string | null {
+  const lower = domain.toLowerCase().replace(/\.$/, '');
+  const match = PAIR_HOSTNAME_PATTERN.exec(lower);
+  return match ? match[1] : null;
+}
+
 // DNS record type numbers
 const TYPE_A = 1;
 const TYPE_AAAA = 28;
@@ -158,6 +183,59 @@ export function buildBlockResponse(query: DnsQuery): Buffer {
 }
 
 /**
+ * Build a synthetic ack response for a resolved pairing/beacon probe query
+ * — the probe sender only needs a reply to arrive, never resolves the IP.
+ */
+export function buildProbeAckResponse(query: DnsQuery): Buffer {
+  const domain = query.domain;
+  const qtype = query.qtype;
+
+  const nameParts = domain.split('.');
+  const nameBuf = Buffer.alloc(domain.length + 2);
+  let off = 0;
+  for (const part of nameParts) {
+    nameBuf[off++] = part.length;
+    nameBuf.write(part, off, 'ascii');
+    off += part.length;
+  }
+  nameBuf[off++] = 0;
+
+  const answerSize = 2 + 2 + 2 + 4 + 2 + (qtype === TYPE_AAAA ? 16 : 4);
+  const headerSize = 12;
+
+  const buf = Buffer.alloc(headerSize + nameBuf.length + 4 + answerSize);
+  let pos = 0;
+
+  buf.writeUInt16BE(query.id, pos); pos += 2;
+  buf.writeUInt16BE(FLAGS_RESPONSE | FLAGS_RECURSION_AVAILABLE | RCODE_NOERROR, pos); pos += 2;
+  buf.writeUInt16BE(1, pos); pos += 2;
+  buf.writeUInt16BE(1, pos); pos += 2;
+  buf.writeUInt16BE(0, pos); pos += 2;
+  buf.writeUInt16BE(0, pos); pos += 2;
+
+  nameBuf.copy(buf, pos); pos += nameBuf.length;
+  buf.writeUInt16BE(qtype, pos); pos += 2;
+  buf.writeUInt16BE(query.qclass, pos); pos += 2;
+
+  buf.writeUInt16BE(0xc00c, pos); pos += 2;
+  buf.writeUInt16BE(qtype, pos); pos += 2;
+  buf.writeUInt16BE(query.qclass, pos); pos += 2;
+  buf.writeUInt32BE(5, pos); pos += 4; // short TTL — this record is never meant to be cached
+
+  if (qtype === TYPE_AAAA) {
+    buf.writeUInt16BE(16, pos); pos += 2;
+    for (let i = 0; i < 15; i++) { buf[pos++] = 0; }
+    buf[pos++] = 1; // ::1
+  } else {
+    buf.writeUInt16BE(4, pos); pos += 2;
+    const parts = PAIR_PROBE_ACK_IP.split('.').map(Number);
+    for (const p of parts) buf[pos++] = p;
+  }
+
+  return buf.slice(0, pos);
+}
+
+/**
  * Build a SERVFAIL DNS response.
  */
 export function buildServfailResponse(query: DnsQuery): Buffer {
@@ -219,6 +297,13 @@ export async function resolve(
   backendClient: BackendClient,
 ): Promise<Buffer> {
   const query = parseQuery(rawQuery);
+
+  const pairToken = extractPairToken(query.domain);
+  if (pairToken) {
+    const confirmed = await backendClient.confirmPair(pairToken, sourceIp, RESOLVER_REGION);
+    console.info(`[PAIR PROBE] token=${pairToken.slice(0, 8)}… sourceIp=${sourceIp} confirmed=${confirmed}`);
+    return buildProbeAckResponse(query);
+  }
 
   const policy = await backendClient.checkPolicy(sourceIp, query.domain);
 

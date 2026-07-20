@@ -16,11 +16,15 @@ function makeFakeSocket() {
   return sock;
 }
 
-function fakeBackendClient(result: PolicyResult | ((domain: string) => PolicyResult)): BackendClient {
+function fakeBackendClient(
+  result: PolicyResult | ((domain: string) => PolicyResult),
+  confirmPairResult = true,
+): BackendClient {
   return {
     checkPolicy: jest.fn(async (_sourceIp: string, domain: string) =>
       typeof result === 'function' ? result(domain) : result,
     ),
+    confirmPair: jest.fn(async () => confirmPairResult),
   } as unknown as BackendClient;
 }
 
@@ -173,6 +177,43 @@ describe('resolve', () => {
     }
 
     expect((backend.checkPolicy as jest.Mock)).toHaveBeenCalledTimes(total);
+  });
+
+  describe('pairing/beacon probe queries', () => {
+    const token = 'a1b2c3d4-e5f6-4789-a012-b3c4d5e6f789';
+
+    it('detects a <token>.pair.guardtime.local probe, confirms it, and never touches policy or upstream', async () => {
+      const backend = fakeBackendClient({ action: 'ALLOW' });
+
+      const query = encodeDnsQuery(77, `${token}.pair.guardtime.local`);
+      const response = await resolve(query, '203.0.113.9', backend);
+
+      expect((backend as any).confirmPair).toHaveBeenCalledWith(token, '203.0.113.9', undefined);
+      expect(backend.checkPolicy).not.toHaveBeenCalled();
+      expect(dgram.createSocket).not.toHaveBeenCalled();
+      expect(response.readUInt16BE(0)).toBe(77);
+      // synthetic ack A record — 127.0.0.1
+      expect(response.subarray(response.length - 4).equals(Buffer.from([127, 0, 0, 1]))).toBe(true);
+    });
+
+    it('still answers with an ack even when the backend confirm call fails', async () => {
+      const backend = fakeBackendClient({ action: 'ALLOW' }, false);
+
+      const query = encodeDnsQuery(88, `${token}.pair.guardtime.local`);
+      const response = await resolve(query, '203.0.113.9', backend);
+
+      expect(response.readUInt16BE(0)).toBe(88);
+    });
+
+    it('does not treat an ordinary domain as a pairing probe', async () => {
+      const backend = fakeBackendClient({ action: 'ALLOW' });
+
+      const query = encodeDnsQuery(99, 'not-a-uuid.pair.guardtime.local');
+      await resolve(query, '203.0.113.9', backend);
+
+      expect((backend as any).confirmPair).not.toHaveBeenCalled();
+      expect(backend.checkPolicy).toHaveBeenCalled();
+    });
   });
 
   it('handles a large volume of concurrent BLOCK requests correctly', async () => {
